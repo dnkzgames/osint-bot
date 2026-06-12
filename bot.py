@@ -4,7 +4,7 @@ import json
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
-BOT_TOKEN = "сюда_свой_токен"
+BOT_TOKEN = "8776971015:AAGYxJPoB4Pnx51UeMM6ma_5xDCG2RCA7tE"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
