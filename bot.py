@@ -347,7 +347,8 @@ async def handle_photo(msg: types.Message):
                 timeout=aiohttp.ClientTimeout(total=15)
             ) as r:
                 result = await r.json()
-                image_url = "https://telegra.ph" + result[0]["src"]
+                item = result[0]
+                image_url = "https://telegra.ph" + (item["src"] if isinstance(item, dict) else item)
 
             yandex = f"https://yandex.ru/images/search?rpt=imageview&url={image_url}"
             google = f"https://lens.google.com/uploadbyurl?url={image_url}"
