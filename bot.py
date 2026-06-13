@@ -4,13 +4,38 @@ import base64
 import json
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 BOT_TOKEN = "8776971015:AAGYxJPoB4Pnx51UeMM6ma_5xDCG2RCA7tE"
+GITHUB_TOKEN = "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"
+NUMLOOKUP_KEY = "num_live_57lWbtzfCnCwioailOivkoGDKicMGgh3V97o75iI"
 WMN_URL = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 wmn_sites = []
+
+
+# ── Заголовки для GitHub API (с PAT — лимит 5000/час вместо 60) ──
+def gh_headers() -> dict:
+    h = {"Accept": "application/vnd.github+json"}
+    if GITHUB_TOKEN:
+        h["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    return h
+
+
+# ── Inline-меню ──────────────────────────────────────
+def main_menu() -> types.InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔍 Юзернейм",        callback_data="menu:username")
+    kb.button(text="👤 GitHub",          callback_data="menu:github")
+    kb.button(text="📧 Email из коммитов", callback_data="menu:gitemail")
+    kb.button(text="📱 Телефон",         callback_data="menu:phone")
+    kb.button(text="✉️ Email",           callback_data="menu:email")
+    kb.button(text="📸 Фото",            callback_data="menu:photo")
+    kb.adjust(2)
+    return kb.as_markup()
+
 
 # ── Загрузка базы сайтов ─────────────────────────────
 async def load_sites():
@@ -23,6 +48,7 @@ async def load_sites():
         print(f"✅ Загружено {len(wmn_sites)} сайтов")
     except Exception as e:
         print(f"❌ Ошибка загрузки базы: {e}")
+
 
 # ── Проверка одного сайта ────────────────────────────
 async def check_site(session, sem, site, username):
@@ -41,6 +67,7 @@ async def check_site(session, sem, site, username):
         pass
     return None
 
+
 # ── Поиск юзернейма ──────────────────────────────────
 async def check_username(username: str) -> list:
     sem = asyncio.Semaphore(30)
@@ -49,6 +76,7 @@ async def check_username(username: str) -> list:
         results = await asyncio.gather(*tasks)
     return [r for r in results if r]
 
+
 # ── /start ───────────────────────────────────────────
 @dp.message(Command("start"))
 async def start(msg: types.Message):
@@ -56,14 +84,32 @@ async def start(msg: types.Message):
         "👁 OSTINeasy — OSINT бот\n\n"
         "🔍 Юзернейм — отправь ник, поиск по 500+ сайтам\n"
         "👤 /github юзернейм — детали GitHub профиля\n"
+        "📧 /gitemail юзернейм — email из коммитов GitHub\n"
         "📱 /phone +77001234567 — инфо о номере\n"
-        "📧 /email адрес@mail.com — поиск по email\n"
+        "✉️ /email адрес@mail.com — поиск по email\n"
         "📸 /photo — затем отправь фото для реверс-поиска\n\n"
-        "Просто отправь текст для поиска по юзернейму."
+        "Или жми кнопки ниже 👇"
     )
-    await msg.answer(text)
+    await msg.answer(text, reply_markup=main_menu())
 
-# ── /github ──────────────────────────────────────────
+
+# ── Роутер inline-кнопок ─────────────────────────────
+@dp.callback_query(F.data.startswith("menu:"))
+async def menu_router(cb: types.CallbackQuery):
+    prompts = {
+        "username": "🔍 Отправь ник — ищу по 500+ сайтам.",
+        "github":   "👤 Введи: /github юзернейм",
+        "gitemail": "📧 Введи: /gitemail юзернейм — выкопаю email из коммитов.",
+        "phone":    "📱 Введи: /phone +77001234567",
+        "email":    "✉️ Введи: /email адрес@mail.com",
+        "photo":    "📸 Отправь фото без подписи — дам ссылки на реверс-поиск.",
+    }
+    action = cb.data.split(":", 1)[1]
+    await cb.message.answer(prompts.get(action, "Неизвестная команда"))
+    await cb.answer()
+
+
+# ── /github (с PAT-токеном) ──────────────────────────
 @dp.message(Command("github"))
 async def github_lookup(msg: types.Message):
     parts = msg.text.split()
@@ -74,7 +120,7 @@ async def github_lookup(msg: types.Message):
     username = parts[1].lstrip("@")
     await msg.answer(f"Ищу GitHub {username}...")
 
-    async with aiohttp.ClientSession() as s:
+    async with aiohttp.ClientSession(headers=gh_headers()) as s:
         async with s.get(f"https://api.github.com/users/{username}") as r:
             if r.status != 200:
                 await msg.answer("❌ Пользователь не найден")
@@ -125,6 +171,71 @@ async def github_lookup(msg: types.Message):
     lines.append(f"\nhttps://github.com/{username}")
     await msg.answer("\n".join(lines))
 
+
+# ── /gitemail (глубокий поиск email по коммитам) ─────
+@dp.message(Command("gitemail"))
+async def gitemail(msg: types.Message):
+    parts = msg.text.split()
+    if len(parts) < 2:
+        await msg.answer("Использование: /gitemail юзернейм")
+        return
+
+    username = parts[1].lstrip("@")
+    await msg.answer(f"📧 Копаю коммиты {username}... может занять время")
+
+    emails: dict[str, set[str]] = {}
+    async with aiohttp.ClientSession(headers=gh_headers()) as s:
+        # список репозиториев (свежие — первыми)
+        async with s.get(
+            f"https://api.github.com/users/{username}/repos?per_page=100&sort=pushed"
+        ) as r:
+            if r.status != 200:
+                await msg.answer("❌ Не удалось получить репозитории")
+                return
+            repos = await r.json()
+
+        if not isinstance(repos, list) or not repos:
+            await msg.answer("❌ У пользователя нет публичных репозиториев")
+            return
+
+        # ограничиваем 20 репами, чтобы не выжечь лимит даже с PAT
+        for repo in repos[:20]:
+            name = repo.get("name")
+            if not name:
+                continue
+            url = f"https://api.github.com/repos/{username}/{name}/commits?per_page=30"
+            try:
+                async with s.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                    if r.status != 200:
+                        continue
+                    commits = await r.json()
+            except:
+                continue
+
+            if not isinstance(commits, list):
+                continue
+
+            for c in commits:
+                commit = c.get("commit", {})
+                for role in ("author", "committer"):
+                    person = commit.get(role, {})
+                    email = person.get("email", "")
+                    pname = person.get("name", "")
+                    if email and "noreply" not in email:
+                        emails.setdefault(email, set()).add(pname)
+
+    if not emails:
+        await msg.answer("❌ Реальных email в коммитах не найдено (всё скрыто noreply)")
+        return
+
+    lines = [f"📧 Email из коммитов {username}:\n"]
+    for email, names in emails.items():
+        tag = ", ".join(n for n in names if n)
+        lines.append(f"• {email}" + (f"  ({tag})" if tag else ""))
+    lines.append(f"\nВсего адресов: {len(emails)}")
+    await msg.answer("\n".join(lines))
+
+
 # ── /phone ───────────────────────────────────────────
 @dp.message(Command("phone"))
 async def phone_lookup(msg: types.Message):
@@ -142,7 +253,7 @@ async def phone_lookup(msg: types.Message):
         try:
             async with s.get(
                 f"https://api.numlookupapi.com/v1/info/{number}",
-                params={"apikey": "num_live_57lWbtzfCnCwioailOivkoGDKicMGgh3V97o75iI"},
+                params={"apikey": NUMLOOKUP_KEY},
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as r:
                 if r.status == 200:
@@ -183,6 +294,7 @@ async def phone_lookup(msg: types.Message):
 
     await msg.answer(text)
 
+
 # ── /email ───────────────────────────────────────────
 @dp.message(Command("email"))
 async def email_lookup(msg: types.Message):
@@ -201,6 +313,7 @@ async def email_lookup(msg: types.Message):
     )
     await msg.answer(text)
 
+
 # ── /photo ───────────────────────────────────────────
 @dp.message(Command("photo"))
 async def photo_cmd(msg: types.Message):
@@ -208,6 +321,7 @@ async def photo_cmd(msg: types.Message):
         "📸 Отправь фото без подписи — загружу и дам ссылки на реверс-поиск.\n"
         "Яндекс лучше всего находит людей из СНГ."
     )
+
 
 # ── Обработка фото ───────────────────────────────────
 @dp.message(F.photo)
@@ -251,6 +365,7 @@ async def handle_photo(msg: types.Message):
 
     await msg.answer(text)
 
+
 # ── Username search ───────────────────────────────────
 @dp.message()
 async def search(msg: types.Message):
@@ -275,9 +390,11 @@ async def search(msg: types.Message):
 
     await msg.answer(text)
 
+
 # ── Запуск ────────────────────────────────────────────
 async def main():
     await load_sites()
     await dp.start_polling(bot)
+
 
 asyncio.run(main())
