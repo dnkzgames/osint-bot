@@ -67,11 +67,11 @@ async def start(msg: types.Message):
 async def github_lookup(msg: types.Message):
     parts = msg.text.split()
     if len(parts) < 2:
-        await msg.answer("Использование: `/github юзернейм`", parse_mode="Markdown")
+        await msg.answer("Использование: /github юзернейм")
         return
 
     username = parts[1].lstrip("@")
-    await msg.answer(f"🔍 Ищу GitHub `{username}`...", parse_mode="Markdown")
+    await msg.answer(f"Ищу GitHub {username}...")
 
     async with aiohttp.ClientSession() as s:
         async with s.get(f"https://api.github.com/users/{username}") as r:
@@ -90,40 +90,33 @@ async def github_lookup(msg: types.Message):
         ) as r:
             events = await r.json() if r.status == 200 else []
 
-    text = f"👤 *{d.get('name') or username}* (`{username}`)\n"
-    if d.get('bio'):              text += f"📝 _{d['bio']}_\n"
-    if d.get('company'):          text += f"🏢 {d['company']}\n"
-    if d.get('location'):         text += f"📍 {d['location']}\n"
-    if d.get('email'):            text += f"📧 `{d['email']}`\n"
-    if d.get('blog'):             text += f"🌐 {d['blog']}\n"
-    if d.get('twitter_username'): text += f"🐦 @{d['twitter_username']}\n"
-
-    text += (
-        f"\n📊 *Статистика:*\n"
-        f"• Репозиториев: {d.get('public_repos', 0)}\n"
-        f"• Подписчиков: {d.get('followers', 0)}\n"
-        f"• Подписок: {d.get('following', 0)}\n"
-        f"• Регистрация: {str(d.get('created_at', ''))[:10]}\n"
-    )
+    lines = [f"👤 {d.get('name') or username} ({username})"]
+    if d.get('bio'):              lines.append(f"📝 {d['bio']}")
+    if d.get('company'):          lines.append(f"🏢 {d['company']}")
+    if d.get('location'):         lines.append(f"📍 {d['location']}")
+    if d.get('email'):            lines.append(f"📧 {d['email']}")
+    if d.get('blog'):             lines.append(f"🌐 {d['blog']}")
+    if d.get('twitter_username'): lines.append(f"🐦 @{d['twitter_username']}")
+    lines.append(f"\nРепо: {d.get('public_repos',0)} | Подписчиков: {d.get('followers',0)} | Подписок: {d.get('following',0)}")
+    lines.append(f"Регистрация: {str(d.get('created_at',''))[:10]}")
 
     if repos and isinstance(repos, list):
-        text += "\n📦 *Последние репозитории:*\n"
+        lines.append("\nПоследние репозитории:")
         for repo in repos[:3]:
-            stars = repo.get('stargazers_count', 0)
-            lang = repo.get('language') or '—'
-            text += f"• [{repo['name']}]({repo['html_url']}) ⭐{stars} `{lang}`\n"
+            lines.append(f"• {repo['name']} ⭐{repo.get('stargazers_count',0)} ({repo.get('language') or '—'})")
+            lines.append(f"  {repo['html_url']}")
 
     if events and isinstance(events, list):
         push_events = [e for e in events if e.get('type') == 'PushEvent']
         if push_events:
             commits = push_events[0].get('payload', {}).get('commits', [])
             if commits:
-                commit_email = commits[0].get('author', {}).get('email', '')
-                if commit_email and 'noreply' not in commit_email:
-                    text += f"\n📧 *Email из коммитов:* `{commit_email}`\n"
+                email = commits[0].get('author', {}).get('email', '')
+                if email and 'noreply' not in email:
+                    lines.append(f"\nEmail из коммитов: {email}")
 
-    text += f"\n🔗 [Открыть профиль](https://github.com/{username})"
-    await msg.answer(text, parse_mode="Markdown")
+    lines.append(f"\nhttps://github.com/{username}")
+    await msg.answer("\n".join(lines))
 
 # ── /phone ───────────────────────────────────────────
 @dp.message(Command("phone"))
@@ -219,66 +212,47 @@ async def handle_photo(msg: types.Message):
     photo_bytes = await bot.download_file(file.file_path)
     b64 = base64.b64encode(photo_bytes.read()).decode()
 
-    async with aiohttp.ClientSession() as s:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://pimeyes.com",
+        "Referer": "https://pimeyes.com/",
+        "Content-Type": "application/json"
+    }
+
+    async with aiohttp.ClientSession(headers=headers) as s:
         try:
-            await s.get("https://pimeyes.com", timeout=aiohttp.ClientTimeout(total=5))
+            # Получаем cookies и CSRF
+            await s.get("https://pimeyes.com", timeout=aiohttp.ClientTimeout(total=8))
 
             payload = f'"data:image/jpeg;base64,{b64}"'
             async with s.post(
                 "https://pimeyes.com/api/upload/file",
                 data=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=15)
+                timeout=aiohttp.ClientTimeout(total=20)
             ) as r:
-                data = await r.json()
-                faces = data.get("faces", [])
+                text_resp = await r.text()
+                if r.content_type == 'application/json' or '{' in text_resp:
+                    import json
+                    data = json.loads(text_resp)
+                    faces = data.get("faces", [])
 
-            if faces:
-                text = f"✅ Найдено совпадений: *{len(faces)}*\n\n"
-                for face in faces[:5]:
-                    url = face.get("url", "")
-                    score = face.get("similarity", "")
-                    text += f"• {url}"
-                    if score: text += f" ({score}%)"
-                    text += "\n"
-                if len(faces) > 5:
-                    text += f"\n_...и ещё {len(faces)-5} совпадений_"
-            else:
-                text = (
-                    "❌ Совпадений не найдено.\n"
-                    "Причины: лицо не распознано, бесплатный лимит, или фото плохого качества."
-                )
+                    if faces:
+                        result = f"✅ Найдено совпадений: {len(faces)}\n\n"
+                        for face in faces[:5]:
+                            result += f"• {face.get('url', '')}\n"
+                        if len(faces) > 5:
+                            result += f"...и ещё {len(faces)-5}"
+                    else:
+                        result = "❌ Совпадений не найдено (лимит или лицо не распознано)"
+                else:
+                    result = "⚠️ PimEyes требует авторизацию или сменил API. Попробуй позже."
 
         except Exception as e:
-            text = f"⚠️ Ошибка при поиске: {str(e)[:100]}"
+            result = f"⚠️ Ошибка: {str(e)[:150]}"
 
-    await msg.answer(text, parse_mode="Markdown")
-
-# ── Username search ───────────────────────────────────
-@dp.message()
-async def search(msg: types.Message):
-    username = msg.text.strip().lstrip("@")
-    if not username or len(username) < 2:
-        return
-
-    count = len(wmn_sites)
-    await msg.answer(
-        f"🔍 Ищу *@{username}* по {count} сайтам...\n⏳ ~20 секунд",
-        parse_mode="Markdown"
-    )
-
-    found = await check_username(username)
-
-    if found:
-        text = f"✅ Найден на *{len(found)}* платформах:\n\n"
-        text += "\n".join(f"• [{site}]({url})" for site, url in found[:35])
-        if len(found) > 35:
-            text += f"\n\n_...и ещё {len(found) - 35} сайтов_"
-    else:
-        text = "❌ Ничего не найдено"
-
-    await msg.answer(text, parse_mode="Markdown")
-
+    await msg.answer(result)
 # ── Запуск ────────────────────────────────────────────
 async def main():
     await load_sites()
