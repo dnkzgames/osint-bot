@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
-from aiogram import Bot, Dispatcher, types
+import base64
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 
 BOT_TOKEN = "8776971015:AAGYxJPoB4Pnx51UeMM6ma_5xDCG2RCA7tE"
@@ -55,7 +56,8 @@ async def start(msg: types.Message):
         "🔍 *Юзернейм* — отправь ник → поиск по 500+ сайтам\n"
         "👤 `/github юзернейм` → детали GitHub профиля\n"
         "📱 `/phone +77001234567` → инфо о номере\n"
-        "📧 `/email адрес@mail.com` → поиск по email\n\n"
+        "📧 `/email адрес@mail.com` → поиск по email\n"
+        "📸 `/photo` → отправь фото для поиска по лицу\n\n"
         "⚡ Просто отправь текст для поиска по юзернейму",
         parse_mode="Markdown"
     )
@@ -101,7 +103,7 @@ async def github_lookup(msg: types.Message):
         f"• Репозиториев: {d.get('public_repos', 0)}\n"
         f"• Подписчиков: {d.get('followers', 0)}\n"
         f"• Подписок: {d.get('following', 0)}\n"
-        f"• Дата регистрации: {str(d.get('created_at', ''))[:10]}\n"
+        f"• Регистрация: {str(d.get('created_at', ''))[:10]}\n"
     )
 
     if repos and isinstance(repos, list):
@@ -114,8 +116,7 @@ async def github_lookup(msg: types.Message):
     if events and isinstance(events, list):
         push_events = [e for e in events if e.get('type') == 'PushEvent']
         if push_events:
-            last = push_events[0]
-            commits = last.get('payload', {}).get('commits', [])
+            commits = push_events[0].get('payload', {}).get('commits', [])
             if commits:
                 commit_email = commits[0].get('author', {}).get('email', '')
                 if commit_email and 'noreply' not in commit_email:
@@ -141,7 +142,7 @@ async def phone_lookup(msg: types.Message):
         try:
             async with s.get(
                 f"https://api.numlookupapi.com/v1/info/{number}",
-                params={"apikey": "demo"},
+                params={"apikey": "num_live_57lWbtzfCnCwioailOivkoGDKicMGgh3V97o75iI"},
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as r:
                 if r.status == 200:
@@ -200,6 +201,58 @@ async def email_lookup(msg: types.Message):
         f"• [Hunter.io](https://hunter.io/email-finder) — корпоративные email",
         parse_mode="Markdown"
     )
+
+# ── /photo ───────────────────────────────────────────
+@dp.message(Command("photo"))
+async def photo_cmd(msg: types.Message):
+    await msg.answer(
+        "📸 Отправь фото с лицом — поищу по интернету через PimEyes.\n"
+        "⚠️ Работает нестабильно, бесплатный лимит ограничен."
+    )
+
+# ── Обработка фото ───────────────────────────────────
+@dp.message(F.photo)
+async def handle_photo(msg: types.Message):
+    await msg.answer("🔍 Ищу лицо по базам...")
+
+    file = await bot.get_file(msg.photo[-1].file_id)
+    photo_bytes = await bot.download_file(file.file_path)
+    b64 = base64.b64encode(photo_bytes.read()).decode()
+
+    async with aiohttp.ClientSession() as s:
+        try:
+            await s.get("https://pimeyes.com", timeout=aiohttp.ClientTimeout(total=5))
+
+            payload = f'"data:image/jpeg;base64,{b64}"'
+            async with s.post(
+                "https://pimeyes.com/api/upload/file",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as r:
+                data = await r.json()
+                faces = data.get("faces", [])
+
+            if faces:
+                text = f"✅ Найдено совпадений: *{len(faces)}*\n\n"
+                for face in faces[:5]:
+                    url = face.get("url", "")
+                    score = face.get("similarity", "")
+                    text += f"• {url}"
+                    if score: text += f" ({score}%)"
+                    text += "\n"
+                if len(faces) > 5:
+                    text += f"\n_...и ещё {len(faces)-5} совпадений_"
+            else:
+                text = (
+                    "❌ Совпадений не найдено.\n"
+                    "Причины: лицо не распознано, бесплатный лимит, или фото плохого качества."
+                )
+
+        except Exception as e:
+            text = f"⚠️ Ошибка при поиске: {str(e)[:100]}"
+
+    await msg.answer(text, parse_mode="Markdown")
 
 # ── Username search ───────────────────────────────────
 @dp.message()
